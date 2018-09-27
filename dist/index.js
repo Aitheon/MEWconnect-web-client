@@ -6,7 +6,7 @@ var EventEmitter = _interopDefault(require('events'));
 var browserOrNode = require('browser-or-node');
 var detectBrowser = require('detect-browser');
 var createLogger = _interopDefault(require('logging'));
-var eccrypto = _interopDefault(require('eccrypto/browser'));
+var eccrypto = _interopDefault(require('eccrypto'));
 var ethUtils = _interopDefault(require('ethereumjs-util'));
 var crypto = _interopDefault(require('crypto'));
 var secp256k1 = _interopDefault(require('secp256k1'));
@@ -177,7 +177,9 @@ var version = "1.0.4";
 
 var version$1 = version;
 var stunServers = [{
-  url: 'stun:global.stun.twilio.com:3478?transport=udp'
+  urls: 'stun:stun.l.google.com:19302'
+}, {
+  urls: 'stun:global.stun.twilio.com:3478?transport=udp'
 }];
 
 var versions = ['0.0.1'];
@@ -508,12 +510,11 @@ function (_MewConnectCommon) {
   function MewConnectInitiator() {
     var _this2;
 
-    var additionalLibs = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : {};
+    var options = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : {};
 
     _classCallCheck(this, MewConnectInitiator);
 
-    _this2 = _possibleConstructorReturn(this, _getPrototypeOf(MewConnectInitiator).call(this));
-    _this2.supportedBrowser = MewConnectCommon.checkBrowser();
+    _this2 = _possibleConstructorReturn(this, _getPrototypeOf(MewConnectInitiator).call(this)); // if (isBrowser) this.supportedBrowser = MewConnectCommon.checkBrowser();
 
     _this2.destroyOnUnload();
 
@@ -521,11 +522,10 @@ function (_MewConnectCommon) {
     _this2.qrCodeString = null;
     _this2.socketConnected = false;
     _this2.connected = false;
-    _this2.signalUrl = null;
     _this2.turnServers = [];
-    _this2.io = additionalLibs.io || io;
-    _this2.Peer = additionalLibs.wrtc || SimplePeer;
-    _this2.mewCrypto = additionalLibs.cryptoImpl || MewConnectCrypto.create();
+    _this2.mewCrypto = options.cryptoImpl || MewConnectCrypto.create();
+    _this2.rtcOptions = options.rtcOptions || {};
+    _this2.signalUrl = options.signalUrl || null;
     _this2.signals = _this2.jsonDetails.signals;
     _this2.rtcEvents = _this2.jsonDetails.rtc;
     _this2.version = _this2.jsonDetails.version;
@@ -541,11 +541,9 @@ function (_MewConnectCommon) {
     // Check if a WebRTC connection exists before a window/tab is closed or refreshed
     // Destroy the connection if one exists
     value: function destroyOnUnload() {
-      var _this3 = this;
-
       if (browserOrNode.isBrowser) {
         window.onunload = window.onbeforeunload = function () {
-          if (!!_this3.Peer && !_this3.Peer.destroyed) {
+          if (!!SimplePeer && !SimplePeer.destroyed) {
             _this.rtcDestroy();
           }
         };
@@ -685,7 +683,7 @@ function (_MewConnectCommon) {
                   transports: ['websocket', 'polling', 'flashsocket'],
                   secure: true
                 };
-                this.socketManager = this.io(url, options);
+                this.socketManager = io(url, options);
                 this.socket = this.socketManager.connect();
                 this.initiatorConnect(this.socket);
 
@@ -725,13 +723,13 @@ function (_MewConnectCommon) {
   }, {
     key: "initiatorConnect",
     value: function initiatorConnect(socket) {
-      var _this4 = this;
+      var _this3 = this;
 
       debug('INITIATOR CONNECT');
       this.uiCommunicator(this.lifeCycle.SocketConnectedEvent);
       this.socket.on(this.signals.connect, function () {
         debug('SOCKET CONNECTED');
-        _this4.socketConnected = true;
+        _this3.socketConnected = true;
       });
       this.socketOn(this.signals.confirmation, this.sendOffer.bind(this)); // response
 
@@ -799,7 +797,7 @@ function (_MewConnectCommon) {
       var _sendOffer = _asyncToGenerator(
       /*#__PURE__*/
       regeneratorRuntime.mark(function _callee4(data) {
-        var plainTextVersion, options;
+        var plainTextVersion;
         return regeneratorRuntime.wrap(function _callee4$(_context4) {
           while (1) {
             switch (_context4.prev = _context4.next) {
@@ -812,15 +810,9 @@ function (_MewConnectCommon) {
                 this.peerVersion = plainTextVersion;
                 this.uiCommunicator(this.lifeCycle.receiverVersion, plainTextVersion);
                 debug('sendOffer', data);
-                options = {
-                  signalListener: this.initiatorSignalListener,
-                  webRtcConfig: {
-                    servers: this.stunServers
-                  }
-                };
-                this.initiatorStartRTC(this.socket, options);
+                this.initiatorStartRTC(this.socket);
 
-              case 8:
+              case 7:
               case "end":
                 return _context4.stop();
             }
@@ -831,149 +823,148 @@ function (_MewConnectCommon) {
       return function sendOffer(_x2) {
         return _sendOffer.apply(this, arguments);
       };
-    }()
-  }, {
-    key: "initiatorSignalListener",
-    value: function initiatorSignalListener(socket, options) {
-      var _this5 = this;
-
-      return (
-        /*#__PURE__*/
-        function () {
-          var _ref = _asyncToGenerator(
-          /*#__PURE__*/
-          regeneratorRuntime.mark(function _callee5(data) {
-            var _this6, encryptedSend;
-
-            return regeneratorRuntime.wrap(function _callee5$(_context5) {
-              while (1) {
-                switch (_context5.prev = _context5.next) {
-                  case 0:
-                    _context5.prev = 0;
-                    _this6 = _this5;
-                    debug('SIGNAL', JSON.stringify(data));
-                    _context5.next = 5;
-                    return _this6.mewCrypto.encrypt(JSON.stringify(data));
-
-                  case 5:
-                    encryptedSend = _context5.sent;
-
-                    _this6.socketEmit(_this6.signals.offerSignal, {
-                      data: encryptedSend,
-                      connId: _this6.connId,
-                      options: options.servers
-                    });
-
-                    _context5.next = 12;
-                    break;
-
-                  case 9:
-                    _context5.prev = 9;
-                    _context5.t0 = _context5["catch"](0);
-                    logger$1.error(_context5.t0);
-
-                  case 12:
-                  case "end":
-                    return _context5.stop();
-                }
-              }
-            }, _callee5, this, [[0, 9]]);
-          }));
-
-          return function (_x3) {
-            return _ref.apply(this, arguments);
-          };
-        }()
-      );
-    } // Handle the WebRTC ANSWER from the opposite (mobile) peer
+    }() // Handle the WebRTC ANSWER from the opposite (mobile) peer
 
   }, {
     key: "recieveAnswer",
     value: function () {
       var _recieveAnswer = _asyncToGenerator(
       /*#__PURE__*/
-      regeneratorRuntime.mark(function _callee6(data) {
+      regeneratorRuntime.mark(function _callee5(data) {
         var plainTextOffer;
-        return regeneratorRuntime.wrap(function _callee6$(_context6) {
+        return regeneratorRuntime.wrap(function _callee5$(_context5) {
           while (1) {
-            switch (_context6.prev = _context6.next) {
+            switch (_context5.prev = _context5.next) {
               case 0:
-                _context6.prev = 0;
-                _context6.next = 3;
+                _context5.prev = 0;
+                _context5.next = 3;
                 return this.mewCrypto.decrypt(data.data);
 
               case 3:
-                plainTextOffer = _context6.sent;
+                plainTextOffer = _context5.sent;
                 this.rtcRecieveAnswer({
                   data: plainTextOffer
                 });
-                _context6.next = 10;
+                _context5.next = 10;
                 break;
 
               case 7:
-                _context6.prev = 7;
-                _context6.t0 = _context6["catch"](0);
-                logger$1.error(_context6.t0);
+                _context5.prev = 7;
+                _context5.t0 = _context5["catch"](0);
+                logger$1.error(_context5.t0);
 
               case 10:
               case "end":
-                return _context6.stop();
+                return _context5.stop();
             }
           }
-        }, _callee6, this, [[0, 7]]);
+        }, _callee5, this, [[0, 7]]);
       }));
 
-      return function recieveAnswer(_x4) {
+      return function recieveAnswer(_x3) {
         return _recieveAnswer.apply(this, arguments);
       };
     }()
   }, {
     key: "rtcRecieveAnswer",
     value: function rtcRecieveAnswer(data) {
+      this.uiCommunicator('AnswerReceived');
       this.p.signal(JSON.parse(data.data));
     }
   }, {
     key: "initiatorStartRTC",
-    value: function initiatorStartRTC(socket, options) {
-      var webRtcConfig = options.webRtcConfig || {};
-      var signalListener = this.initiatorSignalListener(socket, webRtcConfig.servers);
-      var webRtcServers = webRtcConfig.servers || this.stunServers;
-      var suppliedOptions = options.webRtcOptions || {};
+    value: function initiatorStartRTC(socket) {
+      var options = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : this.rtcOptions;
+      var servers = options.servers || this.stunServers;
+      var signalListener = this.initiatorSignalListener(socket, servers);
+      var suppliedOptions = this.rtcOptions || {};
       var defaultOptions = {
         initiator: true,
-        trickle: false,
-        iceTransportPolicy: 'relay',
         config: {
-          iceServers: webRtcServers
+          iceServers: servers
         }
       };
 
-      var simpleOptions = _objectSpread({}, defaultOptions, {
-        suppliedOptions: suppliedOptions
-      });
+      var simpleOptions = _objectSpread({}, defaultOptions, suppliedOptions);
 
       debug("initiatorStartRTC - options: ".concat(simpleOptions));
-      this.uiCommunicator(this.lifeCycle.RtcInitiatedEvent);
-      this.p = new this.Peer(simpleOptions);
+      this.p = new SimplePeer(simpleOptions);
+      this.p.on(this.rtcEvents.signal, signalListener.bind(this));
       this.p.on(this.rtcEvents.error, this.onError.bind(this));
       this.p.on(this.rtcEvents.connect, this.onConnect.bind(this));
       this.p.on(this.rtcEvents.close, this.onClose.bind(this));
       this.p.on(this.rtcEvents.data, this.onData.bind(this));
-      this.p.on(this.rtcEvents.signal, signalListener.bind(this));
+      this.uiCommunicator(this.lifeCycle.RtcInitiatedEvent);
       debug('simple peer', this.p);
+    }
+  }, {
+    key: "initiatorSignalListener",
+    value: function initiatorSignalListener(socket, options) {
+      var _this4 = this;
+
+      return (
+        /*#__PURE__*/
+        function () {
+          var _ref = _asyncToGenerator(
+          /*#__PURE__*/
+          regeneratorRuntime.mark(function _callee6(data) {
+            var _this5, encryptedSend;
+
+            return regeneratorRuntime.wrap(function _callee6$(_context6) {
+              while (1) {
+                switch (_context6.prev = _context6.next) {
+                  case 0:
+                    _context6.prev = 0;
+                    _this5 = _this4;
+                    debug('SIGNAL', JSON.stringify(data));
+                    _context6.next = 5;
+                    return _this5.mewCrypto.encrypt(JSON.stringify(data));
+
+                  case 5:
+                    encryptedSend = _context6.sent;
+
+                    _this4.uiCommunicator('OfferCreated');
+
+                    _this5.socketEmit(_this5.signals.offerSignal, {
+                      data: encryptedSend,
+                      connId: _this5.connId,
+                      options: options.servers
+                    });
+
+                    _context6.next = 13;
+                    break;
+
+                  case 10:
+                    _context6.prev = 10;
+                    _context6.t0 = _context6["catch"](0);
+                    logger$1.error(_context6.t0);
+
+                  case 13:
+                  case "end":
+                    return _context6.stop();
+                }
+              }
+            }, _callee6, this, [[0, 10]]);
+          }));
+
+          return function (_x4) {
+            return _ref.apply(this, arguments);
+          };
+        }()
+      );
     } // ----- WebRTC Communication Event Handlers
 
   }, {
     key: "onConnect",
     value: function onConnect() {
-      var _this7 = this;
+      var _this6 = this;
 
       debug('CONNECT', 'ok');
       this.connected = true;
-      this.socketEmit(this.signals.rtcConnected, this.socketKey);
+      this.socketEmit(this.signals.rtcConnected, this.connId);
       this.socketDisconnect();
       setTimeout(function () {
-        _this7.uiCommunicator(_this7.lifeCycle.RtcConnectedEvent);
+        _this6.uiCommunicator(_this6.lifeCycle.RtcConnectedEvent);
       }, 100);
     }
   }, {
@@ -1162,18 +1153,15 @@ function (_MewConnectCommon) {
     value: function retryViaTurn(data) {
       debug('Retrying via TURN');
       var options = {
-        signalListener: this.initiatorSignalListener,
-        webRtcConfig: {
-          servers: data.data
-        }
+        servers: data.data
       };
       this.initiatorStartRTC(this.socket, options);
     } // ======================== [End] WebRTC Communication Methods =============================
 
   }], [{
     key: "init",
-    value: function init() {
-      return new MewConnectInitiator();
+    value: function init(options) {
+      return new MewConnectInitiator(options);
     }
   }, {
     key: "checkBrowser",
@@ -1190,548 +1178,10 @@ function (_MewConnectCommon) {
   return MewConnectInitiator;
 }(MewConnectCommon);
 
-var logger$2 = createLogger('MewConnectReceiver');
-var debug$1 = debugLogger('MEWconnect:receiver');
-
-var MewConnectReceiver =
-/*#__PURE__*/
-function (_MewConnectCommon) {
-  _inherits(MewConnectReceiver, _MewConnectCommon);
-
-  function MewConnectReceiver() {
-    var _this;
-
-    var additionalLibs = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : {};
-
-    _classCallCheck(this, MewConnectReceiver);
-
-    _this = _possibleConstructorReturn(this, _getPrototypeOf(MewConnectReceiver).call(this));
-    _this.supportedBrowser = MewConnectCommon.checkBrowser();
-
-    _this.destroyOnUnload();
-
-    _this.p = null;
-    _this.qrCodeString = null;
-    _this.socketConnected = false;
-    _this.connected = false;
-    _this.signalUrl = null;
-    _this.turnServers = [];
-    _this.io = additionalLibs.io || io;
-    _this.Peer = additionalLibs.wrtc || SimplePeer;
-    _this.mewCrypto = additionalLibs.cryptoImpl || MewConnectCrypto.create();
-    _this.nodeWebRTC = additionalLibs.webRTC || null;
-    _this.signals = _this.jsonDetails.signals;
-    _this.rtcEvents = _this.jsonDetails.rtc;
-    _this.version = _this.jsonDetails.version;
-    _this.versions = _this.jsonDetails.versions;
-    _this.lifeCycle = _this.jsonDetails.lifeCycle;
-    _this.stunServers = _this.jsonDetails.stunSrvers;
-    return _this;
-  } // Check if a WebRTC connection exists before a window/tab is closed or refreshed
-  // Destroy the connection if one exists
-
-
-  _createClass(MewConnectReceiver, [{
-    key: "destroyOnUnload",
-    value: function destroyOnUnload() {
-      var _this2 = this;
-
-      if (browserOrNode.isBrowser) {
-        window.onunload = window.onbeforeunload = function () {
-          if (!!_this2.Peer && !_this2.Peer.destroyed) {
-            _this2.rtcDestroy();
-          }
-        };
-      }
-    } // Helper method for parsing the connection details string (data in the QR Code)
-
-  }, {
-    key: "parseConnectionCodeString",
-    value: function parseConnectionCodeString(str) {
-      try {
-        var connParts = str.split(this.jsonDetails.connectionCodeSeparator);
-        return {
-          connId: connParts[2].trim(),
-          key: connParts[1].trim(),
-          version: connParts[0].trim()
-        };
-      } catch (e) {
-        logger$2.error(e);
-      }
-    } // ===================== [Start] WebSocket Communication Methods and Handlers ====================
-    // ------------- WebSocket Communication Methods and Handlers ------------------------------
-    // ----- Wrapper around Socket.IO methods
-    // socket.emit wrapper
-
-  }, {
-    key: "socketEmit",
-    value: function socketEmit(signal, data) {
-      this.socket.emit(signal, data);
-    } // socket.disconnect wrapper
-
-  }, {
-    key: "socketDisconnect",
-    value: function socketDisconnect() {
-      this.socket.disconnect();
-    } // socket.on wrapper
-
-  }, {
-    key: "socketOn",
-    value: function socketOn(signal, func) {
-      if (typeof func !== 'function') logger$2.error('not a function?', signal); // one of the handlers is/was not initializing properly
-
-      this.socket.on(signal, func);
-    } // ----- Setup handlers for communication with the signal server
-
-  }, {
-    key: "receiverStart",
-    value: function () {
-      var _receiverStart = _asyncToGenerator(
-      /*#__PURE__*/
-      regeneratorRuntime.mark(function _callee(url, params) {
-        var signed, options;
-        return regeneratorRuntime.wrap(function _callee$(_context) {
-          while (1) {
-            switch (_context.prev = _context.next) {
-              case 0:
-                _context.prev = 0;
-                // Set the private key sent via a QR code scan
-                this.mewCrypto.setPrivate(params.key);
-                _context.next = 4;
-                return this.mewCrypto.signMessage(params.key);
-
-              case 4:
-                signed = _context.sent;
-                this.connId = params.connId;
-                options = {
-                  query: {
-                    signed: signed,
-                    connId: this.connId,
-                    stage: 'receiver'
-                  },
-                  secure: true
-                };
-                this.socketManager = this.io(url, options);
-                this.socket = this.socketManager.connect(); // identity and locate an opposing peer
-
-                this.socketOn(this.signals.handshake, this.socketHandshake.bind(this)); // Handle the WebRTC OFFER from the opposite (web) peer
-
-                this.socketOn(this.signals.offer, this.processOfferReceipt.bind(this));
-                this.socketOn(this.signals.confirmationFailedBusy, this.busyFailure.bind(this));
-                this.socketOn(this.signals.confirmationFailed, this.confirmationFailure.bind(this));
-                this.socketOn(this.signals.invalidConnection, this.invalidFailure.bind(this));
-                this.socketOn(this.signals.disconnect, this.socketDisconnectHandler.bind(this));
-                this.socketOn(this.signals.attemptingTurn, this.willAttemptTurn.bind(this)); // Handle Receipt of TURN server details, and begin a WebRTC connection attempt using TURN
-
-                this.socketOn(this.signals.turnToken, this.retryViaTurn.bind(this));
-                _context.next = 22;
-                break;
-
-              case 19:
-                _context.prev = 19;
-                _context.t0 = _context["catch"](0);
-                logger$2.error(_context.t0);
-
-              case 22:
-              case "end":
-                return _context.stop();
-            }
-          }
-        }, _callee, this, [[0, 19]]);
-      }));
-
-      return function receiverStart(_x, _x2) {
-        return _receiverStart.apply(this, arguments);
-      };
-    }()
-  }, {
-    key: "socketHandshake",
-    value: function () {
-      var _socketHandshake = _asyncToGenerator(
-      /*#__PURE__*/
-      regeneratorRuntime.mark(function _callee2() {
-        var encryptedVersion;
-        return regeneratorRuntime.wrap(function _callee2$(_context2) {
-          while (1) {
-            switch (_context2.prev = _context2.next) {
-              case 0:
-                _context2.next = 2;
-                return this.mewCrypto.signMessage(this.mewCrypto.prvt.toString('hex'));
-
-              case 2:
-                this.signed = _context2.sent;
-                this.uiCommunicator('signatureCheck', this.signed);
-                _context2.next = 6;
-                return this.mewCrypto.encrypt(this.version);
-
-              case 6:
-                encryptedVersion = _context2.sent;
-                this.socketEmit(this.signals.signature, {
-                  signed: this.signed,
-                  connId: this.connId,
-                  version: encryptedVersion
-                });
-
-              case 8:
-              case "end":
-                return _context2.stop();
-            }
-          }
-        }, _callee2, this);
-      }));
-
-      return function socketHandshake() {
-        return _socketHandshake.apply(this, arguments);
-      };
-    }() // ----- Socket Event handlers
-    // Handle Socket Disconnect Event
-
-  }, {
-    key: "socketDisconnectHandler",
-    value: function socketDisconnectHandler(reason) {
-      debug$1(reason);
-      this.socketConnected = false;
-    } // Handle Socket Attempting Turn informative signal
-    // Provide Notice that initial WebRTC connection failed and the fallback method will be used
-
-  }, {
-    key: "willAttemptTurn",
-    value: function willAttemptTurn() {
-      debug$1('TRY TURN CONNECTION');
-      this.uiCommunicator(this.lifeCycle.UsingFallback);
-    } // Handle Socket event to initiate turn connection
-    // Handle Receipt of TURN server details, and begin a WebRTC connection attempt using TURN
-
-  }, {
-    key: "attemptingTurn",
-    value: function attemptingTurn(data) {
-      this.retryViaTurn(data);
-    } // ----- Failure Handlers
-    // Handle Failure due to an attempt to join a connection with two existing endpoints
-
-  }, {
-    key: "busyFailure",
-    value: function busyFailure() {
-      this.uiCommunicator(this.lifeCycle.Failed, this.lifeCycle.confirmationFailedBusyEvent);
-      debug$1('confirmation Failed: Busy');
-    } // Handle Failure due to no opposing peer existing
-
-  }, {
-    key: "invalidFailure",
-    value: function invalidFailure() {
-      this.uiCommunicator(this.lifeCycle.Failed, this.lifeCycle.invalidConnectionEvent);
-      debug$1('confirmation Failed: no opposite peer found');
-    } // Handle Failure due to the handshake/ verify details being invalid for the connection ID
-
-  }, {
-    key: "confirmationFailure",
-    value: function confirmationFailure() {
-      this.uiCommunicator(this.lifeCycle.Failed, this.lifeCycle.confirmationFailedEvent);
-      debug$1('confirmation Failed: invalid confirmation');
-    } // =============== [End] WebSocket Communication Methods and Handlers ========================
-    // ======================== [Start] WebRTC Communication Methods =============================
-    // ----- WebRTC Setup Methods
-
-  }, {
-    key: "processOfferReceipt",
-    value: function () {
-      var _processOfferReceipt = _asyncToGenerator(
-      /*#__PURE__*/
-      regeneratorRuntime.mark(function _callee3(data) {
-        var decryptedOffer, decryptedData;
-        return regeneratorRuntime.wrap(function _callee3$(_context3) {
-          while (1) {
-            switch (_context3.prev = _context3.next) {
-              case 0:
-                _context3.prev = 0;
-                _context3.next = 3;
-                return this.mewCrypto.decrypt(data.data);
-
-              case 3:
-                decryptedOffer = _context3.sent;
-                decryptedData = {
-                  data: decryptedOffer
-                };
-                this.receiveOffer(decryptedData);
-                _context3.next = 11;
-                break;
-
-              case 8:
-                _context3.prev = 8;
-                _context3.t0 = _context3["catch"](0);
-                logger$2.error(_context3.t0);
-
-              case 11:
-              case "end":
-                return _context3.stop();
-            }
-          }
-        }, _callee3, this, [[0, 8]]);
-      }));
-
-      return function processOfferReceipt(_x3) {
-        return _processOfferReceipt.apply(this, arguments);
-      };
-    }()
-  }, {
-    key: "onSignal",
-    value: function () {
-      var _onSignal = _asyncToGenerator(
-      /*#__PURE__*/
-      regeneratorRuntime.mark(function _callee4(data) {
-        var encryptedSend;
-        return regeneratorRuntime.wrap(function _callee4$(_context4) {
-          while (1) {
-            switch (_context4.prev = _context4.next) {
-              case 0:
-                debug$1('SIGNAL: ', JSON.stringify(data));
-                _context4.next = 3;
-                return this.mewCrypto.encrypt(JSON.stringify(data));
-
-              case 3:
-                encryptedSend = _context4.sent;
-                this.socketEmit(this.signals.answerSignal, {
-                  data: encryptedSend,
-                  connId: this.connId
-                });
-                this.uiCommunicator('RtcSignalEvent');
-
-              case 6:
-              case "end":
-                return _context4.stop();
-            }
-          }
-        }, _callee4, this);
-      }));
-
-      return function onSignal(_x4) {
-        return _onSignal.apply(this, arguments);
-      };
-    }()
-  }, {
-    key: "receiveOffer",
-    value: function receiveOffer(data) {
-      debug$1('Receive Offer');
-      var webRtcConfig = data.options || {};
-      var webRtcServers = webRtcConfig.servers || this.stunServers;
-      var simpleOptions = {
-        initiator: false,
-        trickle: false,
-        reconnectTimer: 100,
-        iceTransportPolicy: 'relay',
-        config: {
-          iceServers: webRtcServers
-        }
-      };
-
-      if (!this.isBrowser && this.nodeWebRTC) {
-        simpleOptions.wrtc = this.nodeWebRTC;
-      }
-
-      this.p = new this.Peer(simpleOptions);
-      this.p.signal(JSON.parse(data.data));
-      this.p.on(this.rtcEvents.error, this.onError.bind(this));
-      this.p.on(this.rtcEvents.connect, this.onConnect.bind(this));
-      this.p.on(this.rtcEvents.close, this.onClose.bind(this));
-      this.p.on(this.rtcEvents.data, this.onData.bind(this));
-      this.p.on('signal', this.onSignal.bind(this));
-    } // ----- WebRTC Communication Event Handlers
-
-  }, {
-    key: "onConnect",
-    value: function onConnect() {
-      debug$1('CONNECTED');
-      this.uiCommunicator('RtcConnectedEvent');
-      this.socketEmit(this.signals.rtcConnected, this.connId);
-      this.tryTurn = false;
-      this.socketDisconnect();
-    }
-  }, {
-    key: "onData",
-    value: function () {
-      var _onData = _asyncToGenerator(
-      /*#__PURE__*/
-      regeneratorRuntime.mark(function _callee5(data) {
-        var decryptedData;
-        return regeneratorRuntime.wrap(function _callee5$(_context5) {
-          while (1) {
-            switch (_context5.prev = _context5.next) {
-              case 0:
-                debug$1('DATA RECEIVED', data.toString());
-                _context5.prev = 1;
-
-                if (!this.isJSON(data)) {
-                  _context5.next = 8;
-                  break;
-                }
-
-                _context5.next = 5;
-                return this.mewCrypto.decrypt(JSON.parse(data.toString()));
-
-              case 5:
-                decryptedData = _context5.sent;
-                _context5.next = 11;
-                break;
-
-              case 8:
-                _context5.next = 10;
-                return this.mewCrypto.decrypt(JSON.parse(data.toString()));
-
-              case 10:
-                decryptedData = _context5.sent;
-
-              case 11:
-                if (this.isJSON(decryptedData)) {
-                  this.applyDatahandlers(JSON.parse(decryptedData));
-                } else {
-                  this.applyDatahandlers(decryptedData);
-                }
-
-                _context5.next = 19;
-                break;
-
-              case 14:
-                _context5.prev = 14;
-                _context5.t0 = _context5["catch"](1);
-                logger$2.error(_context5.t0);
-                logger$2('onData ERROR: data=', data);
-                logger$2('onData ERROR: data.toString()=', data.toString());
-
-              case 19:
-              case "end":
-                return _context5.stop();
-            }
-          }
-        }, _callee5, this, [[1, 14]]);
-      }));
-
-      return function onData(_x5) {
-        return _onData.apply(this, arguments);
-      };
-    }()
-  }, {
-    key: "onClose",
-    value: function onClose() {
-      debug$1('WRTC CLOSE');
-      this.uiCommunicator('RtcClosedEvent');
-
-      if (!this.triedTurn && this.tryTurn) {
-        this.attemptTurnConnect();
-      }
-    }
-  }, {
-    key: "onError",
-    value: function onError(err) {
-      debug$1(err.code);
-      debug$1('WRTC ERROR');
-      logger$2.error(err);
-    } // ----- WebRTC Communication Methods
-
-  }, {
-    key: "sendRtcMessage",
-    value: function sendRtcMessage(type, msg) {
-      var _this3 = this;
-
-      return function () {
-        _this3.rtcSend(JSON.stringify({
-          type: type,
-          data: msg
-        }));
-      };
-    }
-  }, {
-    key: "sendRtcMessageResponse",
-    value: function sendRtcMessageResponse(type, msg) {
-      this.rtcSend(JSON.stringify({
-        type: type,
-        data: msg
-      }));
-    }
-  }, {
-    key: "disconnectRTC",
-    value: function disconnectRTC() {
-      var _this4 = this;
-
-      return function () {
-        _this4.uiCommunicator('RtcDisconnectEvent');
-
-        _this4.rtcDestroy();
-      };
-    }
-  }, {
-    key: "rtcSend",
-    value: function () {
-      var _rtcSend = _asyncToGenerator(
-      /*#__PURE__*/
-      regeneratorRuntime.mark(function _callee6(arg) {
-        var encryptedSend;
-        return regeneratorRuntime.wrap(function _callee6$(_context6) {
-          while (1) {
-            switch (_context6.prev = _context6.next) {
-              case 0:
-                if (!(typeof arg === 'string')) {
-                  _context6.next = 6;
-                  break;
-                }
-
-                _context6.next = 3;
-                return this.mewCrypto.encrypt(arg);
-
-              case 3:
-                encryptedSend = _context6.sent;
-                _context6.next = 9;
-                break;
-
-              case 6:
-                _context6.next = 8;
-                return this.mewCrypto.encrypt(JSON.stringify(arg));
-
-              case 8:
-                encryptedSend = _context6.sent;
-
-              case 9:
-                this.p.send(JSON.stringify(encryptedSend));
-
-              case 10:
-              case "end":
-                return _context6.stop();
-            }
-          }
-        }, _callee6, this);
-      }));
-
-      return function rtcSend(_x6) {
-        return _rtcSend.apply(this, arguments);
-      };
-    }()
-  }, {
-    key: "rtcDestroy",
-    value: function rtcDestroy() {
-      this.p.destroy();
-    } // ----- WebRTC Communication TURN Fallback Initiator/Handler
-    // Fallback Step if initial webRTC connection attempt fails.
-    // Retries setting up the WebRTC connection using TURN
-
-  }, {
-    key: "attemptTurnConnect",
-    value: function attemptTurnConnect() {
-      this.triedTurn = true;
-      this.socketEmit(this.signals.tryTurn, {
-        connId: this.connId,
-        cont: true
-      });
-    } // ======================== [End] WebRTC Communication Methods =============================
-
-  }]);
-
-  return MewConnectReceiver;
-}(MewConnectCommon);
-
 // INITIATOR CLIENT
 var index = {
   Crypto: MewConnectCrypto,
-  Initiator: MewConnectInitiator,
-  ReceiverClient: MewConnectReceiver
+  Initiator: MewConnectInitiator
 };
 
 module.exports = index;

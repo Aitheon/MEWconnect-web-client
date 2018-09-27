@@ -12,23 +12,23 @@ const logger = createLogger('MewConnectInitiator');
 
 export default class MewConnectInitiator extends MewConnectCommon {
   constructor(
-    additionalLibs = {}
+    options = {}
   ) {
     super();
 
-    this.supportedBrowser = MewConnectCommon.checkBrowser();
+    // if (isBrowser) this.supportedBrowser = MewConnectCommon.checkBrowser();
 
     this.destroyOnUnload();
     this.p = null;
     this.qrCodeString = null;
     this.socketConnected = false;
     this.connected = false;
-    this.signalUrl = null;
+
     this.turnServers = [];
 
-    this.io = additionalLibs.io || io;
-    this.Peer = additionalLibs.wrtc || SimplePeer;
-    this.mewCrypto = additionalLibs.cryptoImpl || MewConnectCrypto.create();
+    this.mewCrypto = options.cryptoImpl || MewConnectCrypto.create();
+    this.rtcOptions = options.rtcOptions || {};
+    this.signalUrl = options.signalUrl || null;
 
     this.signals = this.jsonDetails.signals;
     this.rtcEvents = this.jsonDetails.rtc;
@@ -39,8 +39,8 @@ export default class MewConnectInitiator extends MewConnectCommon {
   }
 
   // Factory function to create instance using default supplied libraries
-  static init() {
-    return new MewConnectInitiator();
+  static init(options) {
+    return new MewConnectInitiator(options);
   }
 
   // Check if a WebRTC connection exists before a window/tab is closed or refreshed
@@ -48,7 +48,7 @@ export default class MewConnectInitiator extends MewConnectCommon {
   destroyOnUnload() {
     if (isBrowser) {
       window.onunload = window.onbeforeunload = () => {
-        if (!!this.Peer && !this.Peer.destroyed) {
+        if (!!SimplePeer && !SimplePeer.destroyed) {
           _this.rtcDestroy();
         }
       };
@@ -108,8 +108,8 @@ export default class MewConnectInitiator extends MewConnectCommon {
     this.initiatorStart(this.signalUrl);
   }
 
-  async useFallback(){
-    this.socketEmit(this.signals.tryTurn, {connId: this.connId})
+  async useFallback() {
+    this.socketEmit(this.signals.tryTurn, { connId: this.connId });
   }
 
   // Initalize a websocket connection with the signal server
@@ -135,7 +135,7 @@ export default class MewConnectInitiator extends MewConnectCommon {
       transports: ['websocket', 'polling', 'flashsocket'],
       secure: true
     };
-    this.socketManager = this.io(url, options);
+    this.socketManager = io(url, options);
     this.socket = this.socketManager.connect();
     this.initiatorConnect(this.socket);
   }
@@ -253,32 +253,8 @@ export default class MewConnectInitiator extends MewConnectCommon {
     this.peerVersion = plainTextVersion;
     this.uiCommunicator(this.lifeCycle.receiverVersion, plainTextVersion);
     debug('sendOffer', data);
-    const options = {
-      signalListener: this.initiatorSignalListener,
-      webRtcConfig: {
-        servers: this.stunServers
-      }
-    };
-    this.initiatorStartRTC(this.socket, options);
-  }
 
-  initiatorSignalListener(socket, options) {
-    return async data => {
-      try {
-        const _this = this;
-        debug('SIGNAL', JSON.stringify(data));
-        const encryptedSend = await _this.mewCrypto.encrypt(
-          JSON.stringify(data)
-        );
-        _this.socketEmit(_this.signals.offerSignal, {
-          data: encryptedSend,
-          connId: _this.connId,
-          options: options.servers
-        });
-      } catch (e) {
-        logger.error(e);
-      }
-    };
+    this.initiatorStartRTC(this.socket);
   }
 
   // Handle the WebRTC ANSWER from the opposite (mobile) peer
@@ -293,40 +269,61 @@ export default class MewConnectInitiator extends MewConnectCommon {
   }
 
   rtcRecieveAnswer(data) {
+    this.uiCommunicator('AnswerReceived');
     this.p.signal(JSON.parse(data.data));
   }
 
-  initiatorStartRTC(socket, options) {
-    const webRtcConfig = options.webRtcConfig || {};
+  initiatorStartRTC(socket, options = this.rtcOptions) {
+    const servers = options.servers || this.stunServers;
+
     const signalListener = this.initiatorSignalListener(
       socket,
-      webRtcConfig.servers
+      servers
     );
-    const webRtcServers = webRtcConfig.servers || this.stunServers;
 
-    const suppliedOptions = options.webRtcOptions || {};
+    const suppliedOptions = this.rtcOptions || {};
+
     const defaultOptions = {
       initiator: true,
-      trickle: false,
-      iceTransportPolicy: 'relay',
       config: {
-        iceServers: webRtcServers
+        iceServers: servers
       }
     };
 
     const simpleOptions = {
       ...defaultOptions,
-      suppliedOptions
+      ...suppliedOptions
     };
+
     debug(`initiatorStartRTC - options: ${simpleOptions}`);
-    this.uiCommunicator(this.lifeCycle.RtcInitiatedEvent);
-    this.p = new this.Peer(simpleOptions);
+    this.p = new SimplePeer(simpleOptions);
+    this.p.on(this.rtcEvents.signal, signalListener.bind(this));
     this.p.on(this.rtcEvents.error, this.onError.bind(this));
     this.p.on(this.rtcEvents.connect, this.onConnect.bind(this));
     this.p.on(this.rtcEvents.close, this.onClose.bind(this));
     this.p.on(this.rtcEvents.data, this.onData.bind(this));
-    this.p.on(this.rtcEvents.signal, signalListener.bind(this));
+    this.uiCommunicator(this.lifeCycle.RtcInitiatedEvent);
     debug('simple peer', this.p);
+  }
+
+  initiatorSignalListener(socket, options) {
+    return async data => {
+      try {
+        const _this = this;
+        debug('SIGNAL', JSON.stringify(data));
+        const encryptedSend = await _this.mewCrypto.encrypt(
+          JSON.stringify(data)
+        );
+        this.uiCommunicator('OfferCreated');
+        _this.socketEmit(_this.signals.offerSignal, {
+          data: encryptedSend,
+          connId: _this.connId,
+          options: options.servers
+        });
+      } catch (e) {
+        logger.error(e);
+      }
+    };
   }
 
   // ----- WebRTC Communication Event Handlers
@@ -334,7 +331,7 @@ export default class MewConnectInitiator extends MewConnectCommon {
   onConnect() {
     debug('CONNECT', 'ok');
     this.connected = true;
-    this.socketEmit(this.signals.rtcConnected, this.socketKey);
+    this.socketEmit(this.signals.rtcConnected, this.connId);
     this.socketDisconnect();
     setTimeout(() => {
       this.uiCommunicator(this.lifeCycle.RtcConnectedEvent);
@@ -399,9 +396,9 @@ export default class MewConnectInitiator extends MewConnectCommon {
   disconnectRTCClosure() {
     return () => {
       debug('DISCONNECT RTC Closure');
-      _this.uiCommunicator(_this.lifeCycle.RtcDisconnectEvent);
-      _this.rtcDestroy();
-      _this.instance = null;
+      this.uiCommunicator(_this.lifeCycle.RtcDisconnectEvent);
+      this.rtcDestroy();
+      this.instance = null;
     };
   }
 
@@ -435,10 +432,7 @@ export default class MewConnectInitiator extends MewConnectCommon {
   retryViaTurn(data) {
     debug('Retrying via TURN');
     const options = {
-      signalListener: this.initiatorSignalListener,
-      webRtcConfig: {
-        servers: data.data
-      }
+      servers: data.data
     };
     this.initiatorStartRTC(this.socket, options);
   }
