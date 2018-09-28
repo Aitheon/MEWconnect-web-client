@@ -16,7 +16,7 @@ export default class MewConnectInitiator extends MewConnectCommon {
   ) {
     super();
     if (options === null) options = {};
-    if (isBrowser) this.supportedBrowser = MewConnectCommon.checkBrowser();
+    this.supportedBrowser = MewConnectCommon.checkBrowser();
 
     this.destroyOnUnload();
     this.p = null;

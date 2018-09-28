@@ -4,7 +4,7 @@ const webpack = require('webpack')
 module.exports = {
   mode: 'none', // "production" | "development" | "none"
   entry: {
-    MewConnect: ['./specs/MewConnectInitiator.spec.js']
+    MewConnectBrowserTest: ['../specs/MewConnectInitiator.spec.js']
   },
   output: {
     path: __dirname, // string
