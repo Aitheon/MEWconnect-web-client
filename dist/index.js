@@ -386,6 +386,10 @@ function () {
     value: function prepareKey() {
       this.prvt = this.generatePrivate();
       this.pub = this.generatePublic(this.prvt);
+      console.log(this.prvt.toString('hex')); // todo remove dev item
+
+      console.log(this.pub.toString('hex')); // todo remove dev item
+
       return {
         pub: this.pub,
         pvt: this.prvt
@@ -514,7 +518,8 @@ function (_MewConnectCommon) {
 
     _classCallCheck(this, MewConnectInitiator);
 
-    _this2 = _possibleConstructorReturn(this, _getPrototypeOf(MewConnectInitiator).call(this)); // if (isBrowser) this.supportedBrowser = MewConnectCommon.checkBrowser();
+    _this2 = _possibleConstructorReturn(this, _getPrototypeOf(MewConnectInitiator).call(this));
+    if (options === null) options = {}; // if (isBrowser) this.supportedBrowser = MewConnectCommon.checkBrowser();
 
     _this2.destroyOnUnload();
 
@@ -522,6 +527,7 @@ function (_MewConnectCommon) {
     _this2.qrCodeString = null;
     _this2.socketConnected = false;
     _this2.connected = false;
+    _this2.triedTurn = false;
     _this2.turnServers = [];
     _this2.mewCrypto = options.cryptoImpl || MewConnectCrypto.create();
     _this2.rtcOptions = options.rtcOptions || {};
@@ -739,7 +745,7 @@ function (_MewConnectCommon) {
       this.socketOn(this.signals.invalidConnection, this.invalidFailure.bind(this));
       this.socketOn(this.signals.disconnect, this.socketDisconnectHandler.bind(this));
       this.socketOn(this.signals.attemptingTurn, this.willAttemptTurn.bind(this));
-      this.socketOn(this.signals.turnToken, this.attemptingTurn.bind(this));
+      this.socketOn(this.signals.turnToken, this.usingTurnFallback.bind(this));
       return socket;
     } // ----- Socket Event handlers
     // Handle Socket Disconnect Event
@@ -756,13 +762,14 @@ function (_MewConnectCommon) {
     key: "willAttemptTurn",
     value: function willAttemptTurn() {
       debug('TRY TURN CONNECTION');
+      this.triedTurn = true;
       this.uiCommunicator(this.lifeCycle.UsingFallback);
     } // Handle Socket event to initiate turn connection
     // Handle Receipt of TURN server details, and begin a WebRTC connection attempt using TURN
 
   }, {
-    key: "attemptingTurn",
-    value: function attemptingTurn(data) {
+    key: "usingTurnFallback",
+    value: function usingTurnFallback(data) {
       this.retryViaTurn(data);
     } // ----- Failure Handlers
     // Handle Failure due to an attempt to join a connection with two existing endpoints
@@ -869,7 +876,14 @@ function (_MewConnectCommon) {
     key: "rtcRecieveAnswer",
     value: function rtcRecieveAnswer(data) {
       this.uiCommunicator('AnswerReceived');
-      this.p.signal(JSON.parse(data.data));
+      console.log(this.p.destroyed); // todo remove dev item
+
+      if (this.p.destroyed) {
+        this.initiatorStartRTC(this.socket, this.simpleOptions);
+        this.p.signal(JSON.parse(data.data));
+      } else {
+        this.p.signal(JSON.parse(data.data));
+      }
     }
   }, {
     key: "initiatorStartRTC",
@@ -884,11 +898,9 @@ function (_MewConnectCommon) {
           iceServers: servers
         }
       };
-
-      var simpleOptions = _objectSpread({}, defaultOptions, suppliedOptions);
-
-      debug("initiatorStartRTC - options: ".concat(simpleOptions));
-      this.p = new SimplePeer(simpleOptions);
+      this.simpleOptions = _objectSpread({}, defaultOptions, suppliedOptions);
+      debug("initiatorStartRTC - options: ".concat(this.simpleOptions));
+      this.p = new SimplePeer(this.simpleOptions);
       this.p.on(this.rtcEvents.signal, signalListener.bind(this));
       this.p.on(this.rtcEvents.error, this.onError.bind(this));
       this.p.on(this.rtcEvents.connect, this.onConnect.bind(this));
@@ -1046,6 +1058,11 @@ function (_MewConnectCommon) {
       debug(err.code);
       debug('WRTC ERROR');
       debug('error', err);
+
+      if (!this.triedTurn && !this.connected) {
+        this.useFallback();
+      }
+
       this.uiCommunicator(this.lifeCycle.RtcErrorEvent);
     } // ----- WebRTC Communication Methods
 
@@ -1073,14 +1090,17 @@ function (_MewConnectCommon) {
   }, {
     key: "disconnectRTCClosure",
     value: function disconnectRTCClosure() {
+      var _this7 = this;
+
       return function () {
         debug('DISCONNECT RTC Closure');
 
-        _this.uiCommunicator(_this.lifeCycle.RtcDisconnectEvent);
+        _this7.uiCommunicator(_this.lifeCycle.RtcDisconnectEvent);
 
-        _this.rtcDestroy();
+        _this7.rtcDestroy();
 
-        _this.instance = null;
+        _this7.instance = null;
+        _this7.connected = false;
       };
     }
   }, {
@@ -1090,6 +1110,7 @@ function (_MewConnectCommon) {
       this.uiCommunicator(this.lifeCycle.RtcDisconnectEvent);
       this.rtcDestroy();
       this.instance = null;
+      this.connected = false;
     }
   }, {
     key: "rtcSend",
@@ -1143,6 +1164,7 @@ function (_MewConnectCommon) {
     value: function rtcDestroy() {
       if (this.p !== null) {
         this.p.destroy();
+        console.log(this.p.destroyed); // todo remove dev item
       }
     } // ----- WebRTC Communication TURN Fallback Initiator/Handler
     // Fallback Step if initial webRTC connection attempt fails.

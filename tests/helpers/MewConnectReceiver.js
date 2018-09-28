@@ -6,7 +6,7 @@ const MewConnectCrypto = require('../../dist/index.js').Crypto;
 // const logger = logging.default('MewConnectReceiver')
 const isBrowser = require('socket.io-client');
 const SimplePeer = require('simple-peer');
-const wrtc = require('wrtc');
+// const wrtc = require('wrtc');
 const {
   versions,
   connectionCodeSchemas,
@@ -58,8 +58,7 @@ export default class MewConnectReceiver extends EventEmitter {
 
     this.io = io;
     this.Peer = SimplePeer;
-    this.mewCrypto = MewConnectCrypto.create();
-    this.nodeWebRTC = wrtc;
+    this.mewCrypto = options.cryptoImpl || MewConnectCrypto.create();
 
     this.signals = this.jsonDetails.signals;
     this.rtcEvents = this.jsonDetails.rtc;
@@ -92,7 +91,8 @@ export default class MewConnectReceiver extends EventEmitter {
     }
   }
 
-  async useFallback() {
+  useFallback() {
+    console.log('TO USE FALLBACK'); // todo remove dev item
     this.socketEmit(this.signals.tryTurn, { connId: this.connId });
   }
 
@@ -171,11 +171,12 @@ export default class MewConnectReceiver extends EventEmitter {
   }
 
   async socketHandshake() {
-    expect(true).toBeTruthy();
+
     debug('socketHandshake');
     this.signed = await this.mewCrypto.signMessage(
       this.mewCrypto.prvt.toString('hex')
     );
+    // expect(this.signed).toBe('1c061b8b37195d2aea4e5804f9bac62285fb171b34fe8a95fbf98edd26acc1434c781d1532e7bc47e27abdaed17c92df0cc8aa215baeb97c79b210abb3f9aac02a');
     this.uiCommunicator('signatureCheck', this.signed);
     const encryptedVersion = await this.mewCrypto.encrypt(this.version);
     setTimeout(() => {
@@ -245,7 +246,6 @@ export default class MewConnectReceiver extends EventEmitter {
   // ----- WebRTC Setup Methods
 
   async processOfferReceipt(data) {
-    if(this.onlyFallback) return;
     try {
       const decryptedOffer = await this.mewCrypto.decrypt(data.data);
 
@@ -258,54 +258,63 @@ export default class MewConnectReceiver extends EventEmitter {
     }
   }
 
-  receiveOffer(data, servers) {
+  receiveOffer(data) {
     debug('Receive Offer');
     // const webRtcConfig = data.options || {};
     // const webRtcServers = webRtcConfig.servers || this.stunServers;
 
+    const stunServers = [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:global.stun.twilio.com:3478?transport=udp' }
+    ];
+
     const simpleOptions = {
       initiator: false,
-      trickle: true,
-      iceTransportPolicy: 'all',
-      // config: {
-      //   iceServers: [{ url: 'stun:global.stun.twilio.com:3478?transport=udp' }]
-      // }
+      // trickle: true,
+      // iceTransportPolicy: 'all',
+      config: {
+        iceServers: this.turnServers.length > 0 ? this.turnServers : stunServers
+      }
     };
 
-    if(servers) simpleOptions.config = {iceServers: servers};
+    // if(servers) simpleOptions.config = {iceServers: servers};
     this.p = new this.Peer(simpleOptions);
+    this.uiCommunicator('RtcInitiatedEvent');
     this.p.signal(JSON.parse(data.data));
     this.p.on(this.rtcEvents.error, this.onError.bind(this));
     this.p.on(this.rtcEvents.connect, this.onConnect.bind(this));
     this.p.on(this.rtcEvents.close, this.onClose.bind(this));
     this.p.on(this.rtcEvents.data, this.onData.bind(this));
     this.p.on('signal', this.onSignal.bind(this));
+
   }
 
   // ----- WebRTC Communication Event Handlers
 
   async onSignal(data) {
+    // expect(data).toBeTruthy()
     debug('SIGNAL: ', JSON.stringify(data));
     const encryptedSend = await this.mewCrypto.encrypt(JSON.stringify(data));
-
-    // setTimeout(() => {
+    this.uiCommunicator('RtcSignalEvent');
+    setTimeout(() => {
       this.socketEmit(this.signals.answerSignal, {
         data: encryptedSend,
         connId: this.connId
       });
-    // }, 100);
-    this.uiCommunicator('RtcSignalEvent');
+    }, 100);
+
   }
 
   onConnect() {
     debug('CONNECTED');
     this.uiCommunicator('RtcConnectedEvent');
-      this.socketEmit(this.signals.rtcConnected, this.connId);
-      this.tryTurn = false;
-      this.socketDisconnect();
+    this.socketEmit(this.signals.rtcConnected, this.connId);
+    this.tryTurn = false;
+    this.socketDisconnect();
   }
 
   async onData(data) {
+    this.uiCommunicator('data');
     debug('DATA RECEIVED', data.toString());
     try {
       let decryptedData;
@@ -342,6 +351,9 @@ export default class MewConnectReceiver extends EventEmitter {
     debug(err.code);
     debug('WRTC ERROR');
     debug(err);
+    if (!this.triedTurn && this.tryTurn) {
+      this.attemptTurnConnect();
+    }
   }
 
   // ----- WebRTC Communication Methods
@@ -380,9 +392,6 @@ export default class MewConnectReceiver extends EventEmitter {
     this.p.destroy('Intential Error');
   }
 
-  // ----- WebRTC Communication TURN Fallback Initiator/Handler
-  // Fallback Step if initial webRTC connection attempt fails.
-  // Retries setting up the WebRTC connection using TURN
   attemptTurnConnect() {
     this.triedTurn = true;
     setTimeout(() => {
@@ -392,19 +401,19 @@ export default class MewConnectReceiver extends EventEmitter {
 
   retryViaTurn(data) {
     debug('Retrying via TURN');
-    setTimeout(() => {
-      const options = {
-        signalListener: this.initiatorSignalListener,
-        webRtcConfig: {
-          servers: data.data
-        }
-      };
-      this.receiveOffer(options);
-    }, 100);
+    this.turnServers = data.data;
+    //   this.receiveOffer(data.data);
 
+    // const options = {
+    //   signalListener: this.initiatorSignalListener,
+    //   webRtcConfig: {
+    //     servers: data.data
+    //   }
+    // };
+    // setTimeout(() => {
+    //
+    //   this.receiveOffer(data.data);
+    // }, 100);
   }
 
-  // ======================== [End] WebRTC Communication Methods =============================
 }
-
-// module.exports = MewConnectReceiver

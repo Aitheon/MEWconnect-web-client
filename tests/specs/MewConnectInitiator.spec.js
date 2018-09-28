@@ -1,119 +1,14 @@
-// import io from 'socket.io-client';
-// import SimplePeer from 'simple-peer';
-import {Initiator as MewConnect, Crypto as MewConnectCrypto} from '../../dist';
-// import wrtc from 'wrtc';
-// import MewConnectReceiver from '../helpers/MewConnectReceiver';
-//
-import MewConnectCommon from '../../src/MewConnectCommon';
-// import MewConnectCrypto from '../../src/MewConnectCrypto';
-// import MewConnectCrypto from '../../src/MewConnectCrypto';
-// const logging = require('logging')
-import { isBrowser } from 'browser-or-node';
-import detectBrowser from 'detect-browser';
+import '@babel/polyfill'
+import * as MewConnectSrc from '../../src';
 import MewConnectReceiver from '../helpers/MewConnectReceiver';
+import { expect } from 'chai';
 
-const debugLogger = require('debug');
-const io = require('socket.io-client');
-const EventEmitter = require('events').EventEmitter;
-// const MewConnectCrypto = require('../../src/index').Crypto;
-// const MewConnect = require('../../src/index').Initiator;
-const SimplePeer = require('simple-peer');
-const wrtc = require('wrtc');
-// const assert = chai.assert;
+describe('Check Base Connection Operation', function() {
+  const MewConnect = MewConnectSrc.default.Initiator;
 
-// const logging = require('logging')
-
-Object.defineProperties(window, {
-  'MediaStream': {
-    value: wrtc.MediaStream
-  },
-  'MediaStreamTrack': {
-    value: wrtc.MediaStreamTrack
-  },
-  'RTCDataChannel': {
-    value: wrtc.RTCDataChannel
-  },
-  'RTCDataChannelEvent': {
-    value: wrtc.RTCDataChannelEvent
-  },
-  'RTCIceCandidate': {
-    value: wrtc.RTCIceCandidate
-  },
-  'RTCPeerConnection': {
-    value: wrtc.RTCPeerConnection
-  },
-  'RTCPeerConnectionIceEvent': {
-    value: wrtc.RTCPeerConnectionIceEvent
-  },
-  'RTCRtpReceiver': {
-    value: wrtc.RTCRtpReceiver
-  },
-  'RTCRtpSender': {
-    value: wrtc.RTCRtpSender
-  },
-  'RTCSessionDescription': {
-    value: wrtc.RTCSessionDescription
-  }
-});
-
-describe('usingRedis.test.js', function() {
-
-  // afterAll((done) => {
-  //   setTimeout(() => {
-  //     done();
-  //   }, 9000);
-  // }, 10000);
-
-
-
-  // it('should start', (done) => {
-  //   let mewConnectClient = MewConnect.init();
-  //
-  //   mewConnectClient.initiatorStart('http://172.20.0.24');
-  //
-  //   mewConnectClient.on('codeDisplay', code => {
-  //     expect.assertions(1);
-  //     const connParts = code.split('_');
-  //     let params = {
-  //       connId: connParts[2].trim(),
-  //       key: connParts[1].trim(),
-  //       version: connParts[0].trim()
-  //     };
-  //
-  //     let recieverPeer = new MewConnectReceiver();
-  //     setTimeout(() => {
-  //       recieverPeer.receiverStart('http://172.20.0.24', params);
-  //     }, 500);
-  //
-  //     recieverPeer.on('signatureCheck', () => {
-  //       console.log('signatureCheck'); // todo remove dev item
-  //     });
-  //     mewConnectClient.on('RtcInitiatedEvent', () => {
-  //       console.log('RtcInitiatedEvent'); // todo remove dev item
-  //     });
-  //
-  //     mewConnectClient.on('OfferCreated', () => {
-  //       console.log('OfferCreated'); // todo remove dev item
-  //     });
-  //
-  //     mewConnectClient.on('RtcConnectedEvent', () => {
-  //       console.log('RtcConnectedEvent'); // todo remove dev item
-  //       mewConnectClient.disconnectRTC();
-  //       recieverPeer.disconnectRTC();
-  //       expect(true).toBeTruthy();
-  //       done();
-  //     });
-  //
-  //   });
-  // });
-
-  it('should call uiCommunicator', (done) =>{
+  it('should connect', function(done) {
     let mewConnectClient = MewConnect.init();
-
     mewConnectClient.initiatorStart('http://172.20.0.24');
-
-    let uiComm = jest.fn(mewConnectClient.uiCommunicator)
-
     mewConnectClient.on('codeDisplay', code => {
       const connParts = code.split('_');
       let params = {
@@ -122,15 +17,15 @@ describe('usingRedis.test.js', function() {
         version: connParts[0].trim()
       };
 
-      let recieverPeer = new MewConnectReceiver({onlyFallback: false});
+      let recieverPeer = new MewConnectReceiver();
+
       setTimeout(() => {
         recieverPeer.receiverStart('http://172.20.0.24', params);
       }, 500);
 
-
       recieverPeer.on('signatureCheck', () => {
         console.log('signatureCheck'); // todo remove dev item
-        recieverPeer.useFallback();
+
       });
       mewConnectClient.on('RtcInitiatedEvent', () => {
         console.log('RtcInitiatedEvent'); // todo remove dev item
@@ -141,16 +36,147 @@ describe('usingRedis.test.js', function() {
       });
 
       mewConnectClient.on('RtcConnectedEvent', () => {
-        console.log(uiComm); // todo remove dev item
         console.log('RtcConnectedEvent'); // todo remove dev item
         mewConnectClient.disconnectRTC();
         recieverPeer.disconnectRTC();
-        expect(true).toBeTruthy();
+        mewConnectClient.socketDisconnect();
+        recieverPeer.socketDisconnect();
+        // expect(uiCommMock).toHaveBeenCalledTimes(1);
+        done();
       });
 
     });
-  })
+  });
 
+  it('should call fallback', function (done) {
+    this.timeout(5000);
+    let usedTurn = false;
+    console.log('should call fallback'); // todo remove dev item
+    let mewConnectClient = MewConnect.init();
+
+    mewConnectClient.initiatorStart('http://172.20.0.24');
+
+    mewConnectClient.on('codeDisplay', code => {
+      const connParts = code.split('_');
+      let params = {
+        connId: connParts[2].trim(),
+        key: connParts[1].trim(),
+        version: connParts[0].trim()
+      };
+
+      let recieverPeer = new MewConnectReceiver();
+
+      setTimeout(() => {
+        recieverPeer.receiverStart('http://172.20.0.24', params);
+      }, 500);
+
+      recieverPeer.on('signatureCheck', () => {
+        console.log('recieverPeer: signatureCheck'); // todo remove dev item
+      });
+
+      recieverPeer.on('RtcSignalEvent', () => {
+        console.log('recieverPeer: RtcSignalEvent'); // todo remove dev item
+      });
+
+      mewConnectClient.on('RtcInitiatedEvent', () => {
+        console.log('RtcInitiatedEvent'); // todo remove dev item
+      });
+
+      recieverPeer.once('RtcInitiatedEvent', () => {
+        console.log('recieverPeer: RtcInitiatedEvent'); // todo remove dev item
+        mewConnectClient.useFallback();
+      });
+
+      mewConnectClient.on('OfferCreated', () => {
+        console.log('OfferCreated'); // todo remove dev item
+      });
+
+      mewConnectClient.on('UsingFallback', () => {
+        console.log('UsingFallback'); // todo remove dev item
+        usedTurn = true;
+      });
+
+      recieverPeer.on('UsingFallback', () => {
+        console.log('recieverPeer: UsingFallback'); // todo remove dev item
+      });
+
+      mewConnectClient.on('RtcConnectedEvent', () => {
+        console.log('RtcConnectedEvent'); // todo remove dev item
+        mewConnectClient.disconnectRTC();
+        recieverPeer.disconnectRTC();
+        mewConnectClient.socketDisconnect();
+        recieverPeer.socketDisconnect();
+        expect(usedTurn).to.be.true;
+        done();
+      });
+
+    });
+  });
+
+
+  // it('should call fallback', function (done) {
+  //   this.timeout(5000);
+  //   let usedTurn = false;
+  //   console.log('should call fallback'); // todo remove dev item
+  //
+  //   let recieverPeer = new MewConnectReceiver();
+  //   recieverPeer.receiverStart('http://172.20.0.24', params);
+  //
+  //   let mewConnectClient = MewConnect.init();
+  //   setTimeout(() => {
+  //     mewConnectClient.initiatorStart('http://172.20.0.24');
+  //   }, 500);
+  //
+  //   mewConnectClient.on('codeDisplay', code => {
+  //     const connParts = code.split('_');
+  //     let params = {
+  //       connId: connParts[2].trim(),
+  //       key: connParts[1].trim(),
+  //       version: connParts[0].trim()
+  //     };
+  //
+  //     recieverPeer.on('signatureCheck', () => {
+  //       console.log('recieverPeer: signatureCheck'); // todo remove dev item
+  //     });
+  //
+  //     recieverPeer.on('RtcSignalEvent', () => {
+  //       console.log('recieverPeer: RtcSignalEvent'); // todo remove dev item
+  //     });
+  //
+  //     mewConnectClient.on('RtcInitiatedEvent', () => {
+  //       console.log('RtcInitiatedEvent'); // todo remove dev item
+  //     });
+  //
+  //     recieverPeer.on('RtcInitiatedEvent', () => {
+  //       console.log('recieverPeer: RtcInitiatedEvent'); // todo remove dev item
+  //       mewConnectClient.useFallback();
+  //     });
+  //
+  //     mewConnectClient.on('OfferCreated', () => {
+  //       console.log('OfferCreated'); // todo remove dev item
+  //     });
+  //
+  //     mewConnectClient.on('UsingFallback', () => {
+  //       console.log('UsingFallback'); // todo remove dev item
+  //       usedTurn = true;
+  //     });
+  //
+  //     recieverPeer.on('UsingFallback', () => {
+  //       console.log('recieverPeer: UsingFallback'); // todo remove dev item
+  //     });
+  //
+  //     mewConnectClient.on('RtcConnectedEvent', () => {
+  //       console.log('RtcConnectedEvent'); // todo remove dev item
+  //       mewConnectClient.disconnectRTC();
+  //       recieverPeer.disconnectRTC();
+  //       mewConnectClient.socketDisconnect();
+  //       recieverPeer.socketDisconnect();
+  //       expect(usedTurn).to.be.true;
+  //       done();
+  //     });
+  //
+  //   });
+  // });
   /*
   constructor
 init
@@ -193,43 +219,5 @@ rtcDestroy
 retryViaTurn
   */
 
-
-  // it('sanity check', (done) => {
-  //   console.log(MewConnect.getBrowserRTC());
-  //   const defaultOptions = {
-  //     initiator: true,
-  //     trickle: true,
-  //     iceTransportPolicy: 'all'
-  //     // config: {
-  //     //   iceServers: [{ url: 'stun:global.stun.twilio.com:3478?transport=udp' }]
-  //     // }
-  //   };
-  //   var peer1 = new SimplePeer(defaultOptions);
-  //   var peer2 = new SimplePeer();
-  //
-  //   peer1.on('signal', function(data) {
-  //     expect(data).toBeTruthy();
-  //     // console.log(`peer1.on('signal'`, data);
-  //     peer2.signal(data);
-  //   });
-  //
-  //   peer2.on('signal', function(data) {
-  //     // console.log(`peer2.on('signal'`, data);
-  //     expect(data).toBeTruthy();
-  //     peer1.signal(data);
-  //   });
-  //
-  //   peer1.on('connect', function() {
-  //     console.log(`peer1.on('connect'`);
-  //     peer1.send('hello world');
-  //   });
-  //
-  //   peer2.on('data', function(data) {
-  //     console.log(`peer2.on('data'`, data);
-  //     expect(data).toBeTruthy();
-  //     // console.log('got a message from peer1: ' + data);
-  //     done();
-  //   });
-  // });
 
 });
