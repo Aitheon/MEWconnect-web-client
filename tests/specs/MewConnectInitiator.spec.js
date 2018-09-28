@@ -8,7 +8,7 @@ describe('Check Base Connection Operation', function() {
 
   it('should connect', function(done) {
     let mewConnectClient = MewConnect.init();
-    mewConnectClient.initiatorStart('http://172.20.0.24');
+    mewConnectClient.initiatorStart('https://connect.mewapi.io');
     mewConnectClient.on('codeDisplay', code => {
       const connParts = code.split('_');
       let params = {
@@ -20,7 +20,7 @@ describe('Check Base Connection Operation', function() {
       let recieverPeer = new MewConnectReceiver();
 
       setTimeout(() => {
-        recieverPeer.receiverStart('http://172.20.0.24', params);
+        recieverPeer.receiverStart('https://connect.mewapi.io', params);
       }, 500);
 
       recieverPeer.on('signatureCheck', () => {
