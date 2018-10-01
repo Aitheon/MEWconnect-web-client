@@ -3,7 +3,6 @@ import debugLogger from 'debug';
 import { isBrowser } from 'browser-or-node';
 import io from 'socket.io-client';
 import SimplePeer from 'simple-peer';
-// import SimplePeer from './mewRTC';
 import MewConnectCommon from './MewConnectCommon';
 import MewConnectCrypto from './MewConnectCrypto';
 
@@ -13,27 +12,24 @@ const logger = createLogger('MewConnectInitiator');
 
 export default class MewConnectInitiator extends MewConnectCommon {
   constructor(
-    additionalLibs = {}
+    options = {}
   ) {
     super();
-
+    if (options === null) options = {};
     this.supportedBrowser = MewConnectCommon.checkBrowser();
 
     this.destroyOnUnload();
     this.p = null;
     this.qrCodeString = null;
     this.socketConnected = false;
-    this.paused = false;
     this.connected = false;
-    this.closing = false;
-    this.tryingTurn = false;
-    this.signalUrl = null;
+    this.triedTurn = false;
     this.turnServers = [];
+    this.fallbackTimer = null;
 
-    this.io = additionalLibs.io || io;
-    // this.Peer = additionalLibs.wrtc || SimplePeer;
-    this.mewCrypto = additionalLibs.cryptoImpl || MewConnectCrypto.create();
-    this.simplePeerOptions = additionalLibs.simplePeerOptions || false;
+    this.mewCrypto = options.cryptoImpl || MewConnectCrypto.create();
+    this.rtcOptions = options.rtcOptions || {};
+    this.signalUrl = options.signalUrl || null;
 
     this.signals = this.jsonDetails.signals;
     this.rtcEvents = this.jsonDetails.rtc;
@@ -41,40 +37,11 @@ export default class MewConnectInitiator extends MewConnectCommon {
     this.versions = this.jsonDetails.versions;
     this.lifeCycle = this.jsonDetails.lifeCycle;
     this.stunServers = this.jsonDetails.stunSrvers;
-
-    this.on('pause', () => {
-      this.paused = !this.paused;
-      console.log(`PAUSED: ${this.paused}`); // todo remove dev item
-    })
-
-    // Socket is abandoned.  disconnect.
-    setTimeout(() => {
-      if (this.socket) {
-        this.socketDisconnect();
-      }
-    }, 120000);
-  }
-
-  resetState() {
-    if (this.tryingTurn) {
-      this.p = null;
-      this.connected = false;
-      this.closing = false;
-      return;
-    }
-    this.p = null;
-    this.qrCodeString = null;
-    this.socketConnected = false;
-    this.connected = false;
-    this.closing = false;
-    this.tryingTurn = false;
-    this.signalUrl = null;
-    this.turnServers = [];
   }
 
   // Factory function to create instance using default supplied libraries
-  static init() {
-    return new MewConnectInitiator();
+  static init(options) {
+    return new MewConnectInitiator(options);
   }
 
   // Check if a WebRTC connection exists before a window/tab is closed or refreshed
@@ -139,12 +106,11 @@ export default class MewConnectInitiator extends MewConnectCommon {
     if (this.signalUrl === null) {
       throw Error('regenerateCode called before initial code generation');
     }
+    this.socketDisconnect();
     this.initiatorStart(this.signalUrl);
   }
 
   async useFallback() {
-    this.tryingTurn = true;
-    if(!this.paused) this.emit('pause');
     this.socketEmit(this.signals.tryTurn, { connId: this.connId });
   }
 
@@ -152,10 +118,6 @@ export default class MewConnectInitiator extends MewConnectCommon {
   async initiatorStart(url) {
     if (this.signalUrl === null) {
       this.signalUrl = url;
-    }
-    if (this.p) {
-      this.disconnectRTC();
-      this.p = null;
     }
     this.keys = this.mewCrypto.prepareKey();
     const toSign = this.mewCrypto.generateMessage();
@@ -175,7 +137,7 @@ export default class MewConnectInitiator extends MewConnectCommon {
       transports: ['websocket', 'polling', 'flashsocket'],
       secure: true
     };
-    this.socketManager = this.io(url, options);
+    this.socketManager = io(url, options);
     this.socket = this.socketManager.connect();
     this.initiatorConnect(this.socket);
   }
@@ -227,7 +189,7 @@ export default class MewConnectInitiator extends MewConnectCommon {
       this.socketDisconnectHandler.bind(this)
     );
     this.socketOn(this.signals.attemptingTurn, this.willAttemptTurn.bind(this));
-    this.socketOn(this.signals.turnToken, this.attemptingTurn.bind(this));
+    this.socketOn(this.signals.turnToken, this.usingTurnFallback.bind(this));
     return socket;
   }
 
@@ -243,16 +205,14 @@ export default class MewConnectInitiator extends MewConnectCommon {
   // Provide Notice that initial WebRTC connection failed and the fallback method will be used
   willAttemptTurn() {
     debug('TRY TURN CONNECTION');
+    this.triedTurn = true;
     this.uiCommunicator(this.lifeCycle.UsingFallback);
   }
 
   // Handle Socket event to initiate turn connection
   // Handle Receipt of TURN server details, and begin a WebRTC connection attempt using TURN
-  attemptingTurn(data) {
-    this.tryingTurn = true;
-    setTimeout(() => {
-      this.retryViaTurn(data);
-    }, 500);
+  usingTurnFallback(data) {
+    this.retryViaTurn(data);
   }
 
   // ----- Failure Handlers
@@ -292,140 +252,101 @@ export default class MewConnectInitiator extends MewConnectCommon {
 
   // A connection pair exists, create and send WebRTC OFFER
   async sendOffer(data) {
-    if(!this.paused){
-      this.uiCommunicator(this.lifeCycle.sendOffer);
-      const plainTextVersion = await this.mewCrypto.decrypt(data.version);
-      this.peerVersion = plainTextVersion;
-      this.uiCommunicator(this.lifeCycle.receiverVersion, plainTextVersion);
-      debug('sendOffer', data);
-      const options = {
-        signalListener: this.initiatorSignalListener,
-        webRtcConfig: {
-          servers: this.stunServers
-        }
-      };
-      this.initiatorStartRTC(this.socket, options);
-    }
+    this.uiCommunicator(this.lifeCycle.sendOffer);
+    const plainTextVersion = await this.mewCrypto.decrypt(data.version);
+    this.peerVersion = plainTextVersion;
+    this.uiCommunicator(this.lifeCycle.receiverVersion, plainTextVersion);
+    debug('sendOffer', data);
 
-  }
-
-  initiatorSignalListener(socket, options) {
-    return async data => {
-      if(!this.paused) {
-        this.uiCommunicator(this.lifeCycle.offerCreated);
-        try {
-          debug('SIGNAL', JSON.stringify(data));
-          const encryptedSend = await this.mewCrypto.encrypt(
-            JSON.stringify(data)
-          );
-          this.socketEmit(this.signals.offerSignal, {
-            data: encryptedSend,
-            connId: this.connId,
-            options: options.servers
-          });
-        } catch (e) {
-          logger.error(e);
-        }
-      }
-    };
+    this.initiatorStartRTC(this.socket);
   }
 
   // Handle the WebRTC ANSWER from the opposite (mobile) peer
   async recieveAnswer(data) {
-    if(!this.paused) {
-      this.uiCommunicator(this.lifeCycle.answerReceived);
-      try {
-        let plainTextOffer;
-        plainTextOffer = await this.mewCrypto.decrypt(data.data);
-        // this.p.signal(JSON.parse(plainTextOffer));
-
-        if (!this.p.destroyed) {
-          // this.initiatorStartRTC(this.socket, this.simpleOptions);
-          this.p.signal(JSON.parse(plainTextOffer));
-        }
-
-      } catch (e) {
-        logger.error(e);
-      }
+    try {
+      let plainTextOffer;
+      plainTextOffer = await this.mewCrypto.decrypt(data.data);
+      this.rtcRecieveAnswer({ data: plainTextOffer });
+    } catch (e) {
+      logger.error(e);
     }
   }
 
-  initiatorStartRTC(socket, options) {
-    if(this.paused) this.emit('pause');
-    const webRtcConfig = options.webRtcConfig || {};
+
+
+  rtcRecieveAnswer(data) {
+    this.uiCommunicator(this.lifeCycle.answerReceived);
+    if (this.p.destroyed) {
+      this.initiatorStartRTC(this.socket, this.simpleOptions);
+      this.p.signal(JSON.parse(data.data));
+      this.setCancelFallbackTimer();
+    } else {
+      this.p.signal(JSON.parse(data.data));
+      this.setCancelFallbackTimer();
+    }
+
+  }
+
+  initiatorStartRTC(socket, options = this.rtcOptions) {
+    const servers = options.servers || this.stunServers;
+
     const signalListener = this.initiatorSignalListener(
       socket,
-      webRtcConfig.servers
+      servers
     );
-    const webRtcServers = webRtcConfig.servers || this.stunServers;
 
-    const suppliedOptions = options.webRtcOptions || {};
-    let simpleOptions;
+    const suppliedOptions = this.rtcOptions || {};
 
     const defaultOptions = {
       initiator: true,
-      // trickle: false,
-      // iceTransportPolicy: 'all',
       config: {
-        iceServers: webRtcServers
+        iceServers: servers
       }
     };
 
-    if (this.simplePeerOptions && typeof this.simplePeerOptions === 'object') {
-      this.simplePeerOptions.initiator = true;
-      this.simplePeerOptions.config = {
-        iceServers: webRtcServers
-      };
-      simpleOptions = this.simplePeerOptions;
-    } else {
-      simpleOptions = {
-        ...defaultOptions,
-        suppliedOptions
-      };
-    }
+    this.simpleOptions = {
+      ...defaultOptions,
+      ...suppliedOptions
+    };
 
-    this.simpleOptions = simpleOptions
-
-    debug(`initiatorStartRTC - options: ${simpleOptions}`);
+    debug(`initiatorStartRTC - options: ${this.simpleOptions}`);
+    this.p = new SimplePeer(this.simpleOptions);
+    this.p.on(this.rtcEvents.signal, signalListener.bind(this));
+    this.p.on(this.rtcEvents.error, this.onError.bind(this));
+    this.p.on(this.rtcEvents.connect, this.onConnect.bind(this));
+    this.p.on(this.rtcEvents.close, this.onClose.bind(this));
+    this.p.on(this.rtcEvents.data, this.onData.bind(this));
     this.uiCommunicator(this.lifeCycle.RtcInitiatedEvent);
-    this.createPeer(simpleOptions, signalListener);
   }
 
-  createPeer(options, signalListener) {
-    if (this.p === null) {
-      console.log(SimplePeer.destroyed); // todo remove dev item
-      this.p = new SimplePeer(options);
-      console.log(this.p._pc.signalingState, this.tryingTurn); // todo remove dev item
-      this.p.on(this.rtcEvents.error, this.onError.bind(this));
-      this.p.on(this.rtcEvents.connect, this.onConnect.bind(this));
-      this.p.on(this.rtcEvents.close, this.onClose.bind(this));
-      this.p.on(this.rtcEvents.data, this.onData.bind(this));
-      if(signalListener) this.p.on(this.rtcEvents.signal, signalListener.bind(this));
-
-      // temp
-      this.p.on('finish', () => {
-        this.emitStatus('finish');
-      });
-      this.p.on('_iceComplete', () => {
-        this.emitStatus('finish');
-      });
-    } else {
-      debug('INIATOR: PEER RETURNED TRUE');
-      console.log(this.p._pc.signalingState); // todo remove dev item
-      debug(this.p._pc.signalingState);
-    }
+  initiatorSignalListener(socket, options) {
+    return async data => {
+      try {
+        debug('SIGNAL', JSON.stringify(data));
+        const encryptedSend = await this.mewCrypto.encrypt(
+          JSON.stringify(data)
+        );
+        this.uiCommunicator(this.lifeCycle.offerCreated);
+        this.socketEmit(this.signals.offerSignal, {
+          data: encryptedSend,
+          connId: this.connId,
+          options: options.servers
+        });
+      } catch (e) {
+        logger.error(e);
+      }
+    };
   }
 
   // ----- WebRTC Communication Event Handlers
 
   onConnect() {
-    debug('CONNECT', 'ok');
+    this.setCancelFallbackTimer(true);
+    this.uiCommunicator(this.lifeCycle.RtcConnectedEvent);
+    debug("CONNECT", "ok");
     this.connected = true;
-    this.socketEmit(this.signals.rtcConnected, this.socketKey);
+    this.socketEmit(this.signals.rtcConnected, this.connId);
     this.socketDisconnect();
-    setTimeout(() => {
-      this.uiCommunicator(this.lifeCycle.RtcConnectedEvent);
-    }, 100);
   }
 
   async onData(data) {
@@ -458,23 +379,18 @@ export default class MewConnectInitiator extends MewConnectCommon {
 
   onClose(data) {
     debug('WRTC CLOSE', data);
-    if (this.connected) {
-      this.closing = true;
-      this.connected = false;
-      this.uiCommunicator(this.lifeCycle.RtcClosedEvent);
-    }
+    this.connected = false;
+    this.uiCommunicator(this.lifeCycle.RtcClosedEvent);
   }
 
   onError(err) {
     debug(err.code);
     debug('WRTC ERROR');
     debug('error', err);
-    if (!this.connected && !this.tryingTurn && !this.closing) {
-      this.tryingTurn = true;
+    if (!this.triedTurn && !this.connected) {
       this.useFallback();
-    } else {
-      this.uiCommunicator(this.lifeCycle.RtcErrorEvent);
     }
+    this.uiCommunicator(this.lifeCycle.RtcErrorEvent);
   }
 
   // ----- WebRTC Communication Methods
@@ -492,19 +408,21 @@ export default class MewConnectInitiator extends MewConnectCommon {
   }
 
   disconnectRTCClosure() {
-    return () => {
+    return async () => {
       debug('DISCONNECT RTC Closure');
       this.uiCommunicator(this.lifeCycle.RtcDisconnectEvent);
-      this.rtcDestroy();
+      await this.rtcDestroy();
       this.instance = null;
+      this.connected = false;
     };
   }
 
-  disconnectRTC() {
+  async disconnectRTC() {
     debug('DISCONNECT RTC');
     this.uiCommunicator(this.lifeCycle.RtcDisconnectEvent);
-    this.rtcDestroy();
+    await this.rtcDestroy();
     this.instance = null;
+    this.connected = false;
   }
 
   async rtcSend(arg) {
@@ -518,30 +436,49 @@ export default class MewConnectInitiator extends MewConnectCommon {
     this.p.send(JSON.stringify(encryptedSend));
   }
 
-  rtcDestroy() {
+  async rtcDestroy() {
     if (this.p !== null) {
       this.p.destroy();
       this.p = null;
-      this.resetState();
-    } else {
-      this.resetState();
+      this.socketConnected = false;
+      this.connected = false;
+      this.signalUrl = null;
+      this.turnServers = [];
+      this.fallbackTimer = [];
     }
   }
 
-  // ----- WebRTC Communication TURN Fallback Initiator/Handler
+  rtcEmitError(msg) {
+    if (this.p !== null) {
+      this.p.destroy(msg);
+    }
+  }
+
+  // ------------------ WebRTC Communication TURN Fallback ------------------
+
+  // ------ TURN Fallback timeout trigger ------
+    setCancelFallbackTimer(cancel){
+      if(this.fallbackTimer || cancel){
+        debug(`Cancelling fallback timer`)
+        clearTimeout(this.fallbackTimer)
+      } else {
+        this.fallbackTimer = setTimeout(() => {
+          debug(`triggering fallback for connection ID: ${this.connId}`);
+          this.socketEmit(this.signals.tryTurn, { connId: this.connId, data: null });
+          this.rtcEmitError();
+        }, 5000);
+      }
+
+    }
+
+  // ------ Fallback Initiator/Handler ------
   // Fallback Step if initial webRTC connection attempt fails.
   // Retries setting up the WebRTC connection using TURN
-  async retryViaTurn(data) {
-    this.uiCommunicator('gotTurnDetails');
-
-    this.rtcDestroy();
-    debug(`turn servers: ${JSON.stringify(data)}`);
+  retryViaTurn(data) {
+    this.setCancelFallbackTimer(true)
     debug('Retrying via TURN');
     const options = {
-      signalListener: this.initiatorSignalListener,
-      webRtcConfig: {
-        servers: data.data
-      }
+      servers: data.data
     };
     this.initiatorStartRTC(this.socket, options);
   }
