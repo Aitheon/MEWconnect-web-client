@@ -5,6 +5,8 @@
   "main": "./dist/index.js",
   "scripts": {
     "start": "node ./example/peer_server/www.js",
+    "test": "jest --detectOpenHandles --forceExit --runInBand",
+    "buildBrowserTest": "webpack --config tests/browser/webpack.config.js",
     "build": "rimraf dist/ && rollup -c",
     "lint": "eslint --fix 'src/**.js'"
   },
@@ -15,24 +17,39 @@
     "ethereumjs-util": "^5.2.0",
     "events": "^3.0.0",
     "logging": "^3.2.0",
+    "mocha": "^5.2.0",
     "secp256k1": "^3.5.2",
     "simple-peer": "^9.1.2",
     "socket.io-client": "^2.1.1"
   },
   "devDependencies": {
     "@babel/core": "^7.1.0",
+    "@babel/plugin-transform-runtime": "^7.1.0",
+    "@babel/polyfill": "^7.0.0",
     "@babel/preset-env": "^7.0.0",
+    "@babel/register": "^7.0.0",
+    "@babel/runtime": "^7.0.0",
+    "babel-core": "^7.0.0-bridge.0",
+    "babel-jest": "*",
+    "babel-loader": "^8.0.4",
+    "babel-polyfill": "^6.26.0",
     "bufferutil": "^4.0.0",
+    "chai": "^4.2.0",
     "eslint": "^5.6.0",
     "eslint-config-airbnb-base": "^13.1.0",
     "eslint-config-prettier": "^3.0.1",
     "eslint-plugin-import": "^2.14.0",
+    "jest": "^23.6.0",
+    "nyc": "^13.0.1",
     "rimraf": "^2.6.2",
     "rollup": "^0.66.0",
     "rollup-plugin-babel": "^4.0.3",
     "rollup-plugin-commonjs": "^9.1.8",
     "rollup-plugin-json": "^3.1.0",
     "rollup-plugin-node-builtins": "^2.1.2",
-    "rollup-plugin-node-resolve": "^3.4.0"
+    "rollup-plugin-node-resolve": "^3.4.0",
+    "webpack": "^4.20.2",
+    "webpack-cli": "^3.1.1",
+    "wrtc": "^0.2.0"
   }
 }
